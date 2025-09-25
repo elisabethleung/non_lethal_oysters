@@ -1,0 +1,320 @@
+---
+title: "mortality_analysis"
+output: html_document
+date: "2023-03-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r data import and libraries}
+
+mortality_data = read.csv("mortality_data.csv")
+dna_data = read.csv("dna_data.csv")
+gel_pivot = read.csv("gel_scores.csv", header = TRUE, skip = 1)
+
+library(survival)
+library(ggridges)
+library(tidyverse)
+library(multcompView)
+library(reshape2)
+library(survminer)
+```
+
+```{r adding dead columns}
+mortality_data$Dead <- ifelse(mortality_data$Lifespan_days > 0, "Dead", "Alive")
+mortality_data$Dead[is.na(mortality_data$Dead)] = "Alive"
+
+mortality_data$Dead_bin <- ifelse(mortality_data$Dead == "Dead", 0 , 1)
+```
+
+```{r alive and dead subsets}
+alive_oysters = mortality_data[mortality_data$Dead == "Alive", ]
+dead_oysters = mortality_data[mortality_data$Dead == "Dead", ]
+```
+
+```{r pivot tables}
+### pivot table of deaths 
+deadResultsTable <- aggregate(dead_oysters$Lifespan_days ~ dead_oysters$Overall_Trt, FUN = length)
+colnames(deadResultsTable)<- c("Overall_Trt", "Dead")
+
+### pivot table of deaths with no preservation 
+deadResultsNoPresTable <- aggregate(dead_oysters$Lifespan_days ~ dead_oysters$Exterior_Trt
+                                + dead_oysters$Tissue_Trt, FUN = length)
+colnames(deadResultsNoPresTable)<- c("Exterior_Trt", "Tissue_Trt", "Dead")
+
+
+### pivot table of treatment counts 
+treatmentCount <- aggregate(mortality_data$Dead ~ mortality_data$Overall_Trt, FUN = length)
+
+colnames(treatmentCount)<- c( "Overall_Trt", "Count")
+
+percentSurvival <- (1 - deadResultsTable$Dead/ treatmentCount$Count) * 100
+percentSurvival <- data.frame(treatment = c("Mortality_Control", "Notch_EPF_Flash",  "Notch_EPF_FTA", "Notch_Hemo_Flash", "Notch_Hemo_FTA", "Relax_Mantle_Etoh", "Relax_Swab_Flash"),  survival = percentSurvival)
+
+```
+
+
+```{r make no fta group}
+mortality_data_nofta <- mortality_data[!mortality_data$Preserv_Trt == "FTAClassic", ]
+```
+
+
+## Oyster size across treatments  -- ANOVA
+```{r}
+sizeTrt<- aov(Length ~ Overall_Trt, data = mortality_data)
+summary(sizeTrt)
+
+TukeyHSD(sizeTrt)
+```
+
+
+
+```{r oyster mean by group}
+aggregate(Length ~ Overall_Trt,  data = mortality_data, FUN = mean)
+aggregate(Length ~ Overall_Trt,  data = mortality_data_nofta, FUN = mean)
+```
+
+## Comparing the two control groups
+```{r}
+binom.test(39, 40, 29/30)
+```
+
+## Mortality analyses:
+
+
+### Mortality over the experiment by treatment
+
+```{r FIGURE 2}
+
+### setting all the alive oysters to a lifespan longer than the experiment
+mortality_data_nofta$Lifespan_days[is.na(mortality_data_nofta$Lifespan_days)] = 11.5
+
+mort_day_subset <- mortality_data_nofta[, c("Lifespan_days", "Dead_bin", "Overall_Trt")]
+mort_day_subset$Dead_bin <- as.numeric(as.character(mort_day_subset$Dead_bin))
+
+## flip dead and alive for the Surv function
+mort_day_subset$Dead_bin <- ifelse(mort_day_subset$Dead_bin == 1, 0, 1)
+
+km_fit <- survfit(Surv(Lifespan_days, Dead_bin) ~ Overall_Trt, data = mort_day_subset)
+
+summary(km_fit, time = c(1,2,3,4,5,6,7,8,9,10,11))
+  
+surv_plot <- ggsurvplot(km_fit, data = mort_day_subset, xlim =c(0,10.9), xlab = "Days", ylab = "Survival Probability", ggtheme = theme_minimal(), title = "Survival Curve by Treatment", conf.int = FALSE, break.time.by = 1 ) 
+
+surv_plot$plot <- surv_plot$plot + theme(text=element_text(family="serif"), plot.title = element_text(hjust= 0.5, size = 20), axis.title = element_text(size = 15)) + 
+  scale_color_manual(
+    labels = c("Mortality_Control_1", "Notch_EPF_Flash", "Notch_Hemo__Flash", "Relax_Mantle_Etoh", "Relax_Swab_Flash"), 
+    values = c("black", "blue", "purple", "orange", "red")
+  )
+print(surv_plot) 
+```
+
+## length and mortality by treatment plot 
+
+```{r FIGURE 3}
+ggplot(data = mortality_data_nofta, aes(x = Length, fill = Dead)) + 
+  geom_histogram(position = "identity", alpha = 0.7, bins = 30) +
+  scale_fill_manual(values = c("Alive" = "grey", "Dead" = "black")) + 
+  facet_wrap(~ Overall_Trt, labeller = as_labeller(c(
+    "RelaxEpsom_Swab_FlashFreeze" = "Relax_Swab_Flash",
+    "RelaxEpsom_Mantle_Etoh" = "Relax_Mantle_EtOH",
+    "Notch_Hemolymph_FlashFreeze" = "Notch_Hemo_Flash",
+    "Notch_EPF_FlashFreeze" = "Notch_EPF_Flash",
+    "Control_Control_Control" = "Mortality_Control_1"
+  ))) +
+  labs(
+    x = "Length (mm)", 
+    y = "Count", 
+    fill = "Mortality", 
+    title = "Length and Mortality by Treatment"
+  ) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    text = element_text(family = "serif")
+  )
+
+ggsave("fig_3_histograms.png", dpi = 300, width = 6, height = 4)
+
+```
+
+
+### Mortality by treatment anaylsis- Logistic regression analysis
+```{r FIGURE 4 - LOG REGRESSION}
+
+mortality_data_nofta$Overall_Trt <- factor(mortality_data_nofta$Overall_Trt)
+mortality_data_nofta$Overall_Trt <- factor(mortality_data_nofta$Overall_Trt)
+
+mort_glm <-glm(Dead_bin ~  Length + Overall_Trt, data = mortality_data_nofta, family = binomial ( link = "logit"))
+
+summary(mort_glm)
+
+mortality_data_nofta$Overall_Trt <- relevel(mortality_data_nofta$Overall_Trt, ref = "Control_Control_Control")
+
+mortality_data_nofta$predicted_prob <- predict(mort_glm, type = "response")
+
+ggplot(mortality_data_nofta, aes(x = Length, y = predicted_prob, color = Overall_Trt)) + 
+  labs(x = "Length of Oyster", y = "Predicted Survival Probability", color = "Treatment") +
+  geom_line(size = 1) + geom_point(aes(y = Dead_bin)) + 
+  theme_minimal() +
+  scale_color_manual(labels = c("Mortality_Control_1", "Notch_EPF_Flash", "Notch_Hemo__Flash", "Relax_Mantle_Etoh", "Relax_Swab_Flash"), 
+                     values = c( "black","blue","purple", "orange", "red")) + 
+  ggtitle("Logistic Regression Survival Probability") +  
+    theme(plot.title = element_text(hjust= 0.5)) +
+    theme(text=element_text(family="serif")) + labs(x = "Length (mm) ", y = "Predicted Probability")
+ggsave("fig_4_mortality.pdf", width = 10, height = 7)
+
+
+#subset(mortality_data_nofta, Overall_Trt == "Notch_Hemolymph_FlashFreeze", select =c("Length", "predicted_prob"))
+
+```
+
+
+### function for determining length over survival perc of 90
+```{r}
+new_lengths <- seq(0, 100, by = 1)
+treatments <- unique(mortality_data_nofta$Overall_Trt)
+
+for(trt in treatments) {
+    pred_data <- data.frame(Overall_Trt = trt, Length = new_lengths)
+    pred_surv <- predict(mort_glm, newdata = pred_data, type = "response")
+    
+    # First length where surv probability > 0.90
+    first_high_pred <- which(pred_surv > 0.90)[1]
+    
+    if (!is.na(first_high_pred)) {
+        first_length <- new_lengths[first_high_pred]
+        first_survival <- pred_surv[first_high_pred]
+    
+        print(paste(trt,":","First length with survival > 0.90:", first_length, ", Survival:", round(first_survival, 2)))
+        } 
+    else {
+      print(paste(trt))
+      print("No lengths with survival probability > 0.90")
+    }}
+```
+
+
+## DNA Quantity ANOVA
+```{r}
+dna_publish <- dna_data[dna_data$publish == "TRUE", ]
+
+dna_publish$Overall_Trt <- factor(dna_publish$Overall_Trt, levels =  c("Control_Control_Control", "RelaxEpsom_Mantle_Etoh", "Notch_Hemolymph_FlashFreeze", "Notch_EPF_FlashFreeze", "RelaxEpsom_Swab_FlashFreeze"))
+
+dna_publish$dna_conc_ng_total <- as.numeric(dna_publish$dna_conc_ng_total)
+dna_publish$dna_conc_ng_ul <- as.numeric(dna_publish$dna_conc_ng_ul)
+
+dna_aov <- aov(dna_conc_ng_ul ~ Overall_Trt, data = dna_publish)
+summary(dna_aov)
+
+(tukey_res <- TukeyHSD(dna_aov))
+
+(dna_letters <- multcompLetters4(dna_aov, tukey_res))
+
+letters_df <- data.frame(Overall_Trt = names(dna_letters$`Overall_Trt`$Letters), 
+                         Short_name = c("Relax_Mantle_Etoh", "DNA_Control", "Relax_Swab_Flash", "Notch_EPF_Flash", "Notch_Hemo_Flash"), 
+                         Letters = dna_letters$`Overall_Trt`$Letters)
+
+letters_df <- letters_df[c(2,1,5,4,3), ]
+
+```
+
+```{r FIGURE 5: BOXPLOT}
+
+max_ng_ul_values <- aggregate(dna_conc_ng_ul~Overall_Trt, FUN = max, data = dna_publish)$'dna_conc_ng_ul'
+
+ggplot(dna_publish, aes(x=Overall_Trt, y=dna_conc_ng_ul)) + 
+  geom_boxplot() + 
+  theme_classic() + 
+  ylim(0, max(dna_publish$dna_conc_ng_ul) + 15) +
+  ggtitle ("DNA Concentration by Treatment") + 
+  theme(plot.title = element_text(hjust= 0.5)) +
+  theme(text=element_text(family="serif")) +
+  scale_x_discrete(labels = c("DNA_Control", "Relax_Mantle_EtOH", 
+                              "Notch_Hemo_Flash", "Notch_EPF_Flash", 
+                              "Relax_Swab_Flash")) + 
+  labs(x = "Treatment Group", y = "DNA Concentration (ng/ul)") + 
+  theme(text=element_text(family="serif")) + 
+  geom_text(data = letters_df, aes(x = Overall_Trt, y = max_ng_ul_values + 10,  label = Letters), family = "serif")
+
+ggsave("fig5_dna_conc_ng_ul_boxplot.png", dpi = 300, width = 6, height = 4)
+
+
+##means for each group in ng_ul 
+dna_data$dna_conc_ng_ul <- as.numeric(dna_data$dna_conc_ng_ul)
+aggregate(dna_conc_ng_ul~Overall_Trt, FUN = mean, data = dna_data)
+
+
+dna_publish$dna_conc_ng_ul <- as.numeric(dna_publish$dna_conc_ng_ul)
+aggregate(dna_conc_ng_ul~Overall_Trt, FUN = mean, data = dna_publish)
+
+```
+
+
+
+## DNA Quality Analysis
+```{r}
+# turning NAs into 0s
+gel_pivot[is.na(gel_pivot)] <- 0
+
+gel_nototals <- gel_pivot[-6, -6]
+
+#do a fisher test instead of chi sq because some of the expected counts are less than 5
+fisher.test(gel_nototals[, -1], simulate.p.value = TRUE, B = 100000)
+
+```
+
+```{r FIGURE 6 - PIE CHARTS}
+
+gel_pivot$Overall_Trt[gel_pivot$Overall_Trt == "Control_Control_Control"] <- "DNA_Control"
+gel_pivot$Overall_Trt[gel_pivot$Overall_Trt == "RelaxEpsom_Mantle_Etoh"] <- "Relax_Mantle_EtOH"
+gel_pivot$Overall_Trt[gel_pivot$Overall_Trt == "RelaxEpsom_Swab_FlashFreeze"] <- "Relax_Swab_Flash"
+gel_pivot$Overall_Trt[gel_pivot$Overall_Trt == "Notch_EPF_FlashFreeze"] <- "Notch_EPF_Flash"
+gel_pivot$Overall_Trt[gel_pivot$Overall_Trt == "Notch_Hemolymph_FlashFreeze"] <- "Notch_Hemo_Flash"
+
+gel_pivot[is.na(gel_pivot)] <- 0
+
+gel_nototals <- gel_pivot[-6, -6]
+
+gel_percent <- data.frame(matrix(ncol = 5, nrow = nrow(gel_nototals)))
+
+for (i in 1:nrow(gel_nototals)) {
+    gel_percent[i, 1] <- gel_pivot[i, 1]  # treatment name
+    gel_percent[i, 2] <- gel_pivot[i, 2] / gel_pivot[i, 6]
+    gel_percent[i, 3] <- gel_pivot[i, 3] / gel_pivot[i, 6]
+    gel_percent[i, 4] <- gel_pivot[i, 4] / gel_pivot[i, 6]
+    gel_percent[i, 5] <- gel_pivot[i, 5] / gel_pivot[i, 6]
+}
+
+gel_percent_long <- melt(gel_percent)
+colnames(gel_percent_long) <- c("Treatment", "Level", "Value")
+gel_percent_long_no_totals<- subset(gel_percent_long, Treatment != "Grand Total")
+
+ggplot(gel_percent_long_no_totals, aes(x="", y=Value, fill=Level)) + 
+  geom_bar(stat="identity", width=1) + 
+  coord_polar("y", start=0) + 
+  facet_wrap(~Treatment) + 
+  theme_void() + 
+  scale_fill_manual(labels = c("1 (> 3000bp and smeared", "2 (all smeared)", "3 (barely visible", "4 (not visible)"), 
+                    values = c( "#Fee727","#33B879", "#30688e" ,"#440115")) +
+  ggtitle ("DNA Quality by Treatment") + 
+  theme(plot.title = element_text(hjust= 0.5, vjust = 0.75, margin = margin(t = 10, r = 10, b = 10, l = 10))) +
+  theme(text=element_text(family="serif"))
+
+ggsave("fig6_piecharts.png", dpi = 300, width = 6, height = 4)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

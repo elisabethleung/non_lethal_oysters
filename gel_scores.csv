@@ -1,0 +1,8 @@
+COUNTA of Overall_Trt,gel_score,,,,
+Overall_Trt,1 ( > 3000bp and smeared),2 (all smeared),3 (barely visible),4 (not visible),Grand Total
+Control_Control_Control,23,7,,,30
+Notch_EPF_FlashFreeze,,,8,12,20
+Notch_Hemolymph_FlashFreeze,2,,5,13,20
+RelaxEpsom_Mantle_Etoh,1,19,,,20
+RelaxEpsom_Swab_FlashFreeze,7,12,1,,20
+Grand Total,33,38,14,25,110
