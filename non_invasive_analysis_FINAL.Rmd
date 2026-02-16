@@ -384,7 +384,7 @@ ggplot(combined_data, aes(x = percent_alive, y = mean_dna_conc,
 
 ggsave("fig7_scatter.png", dpi = 300, width = 7, height = 4)
 
-ggsave("../manuscript_submission/Figure_7.pdf", dpi = 300, width = 7, height = 4)
+ggsave("../manuscript_submission/Figure_7.pdf", dpi = 300, width = 8, height = 4)
 ```
 
 
